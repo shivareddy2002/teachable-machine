@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Camera, CameraOff, Download } from 'lucide-react';
+import { Camera, CameraOff, Download, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useWebcam } from '@/hooks/useWebcam';
 import type { PredictionResult } from '@/types/teachable';
@@ -17,7 +17,7 @@ export function PreviewPanel({
   onPredict,
   onExport,
 }: PreviewPanelProps) {
-  const { videoRef, isActive, error, startWebcam, stopWebcam } = useWebcam();
+  const { videoRef, isActive, isLoading, error, startWebcam, stopWebcam } = useWebcam();
   const [isPredicting, setIsPredicting] = useState(false);
   const animationRef = useRef<number | null>(null);
 
@@ -82,15 +82,22 @@ export function PreviewPanel({
           className="w-full h-full object-cover"
         />
         
-        {!isActive && (
+        {isLoading && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-muted/80">
+            <Loader2 className="h-12 w-12 animate-spin text-primary mb-2" />
+            <span className="text-sm text-muted-foreground">Starting camera...</span>
+          </div>
+        )}
+        
+        {!isActive && !isLoading && !error && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
             <CameraOff className="h-12 w-12 mb-2 opacity-50" />
             <span className="text-sm">Camera is off</span>
           </div>
         )}
 
-        {error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-muted text-muted-foreground text-sm p-4 text-center">
+        {error && !isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-muted text-destructive text-sm p-4 text-center">
             {error}
           </div>
         )}
@@ -113,9 +120,14 @@ export function PreviewPanel({
         className="w-full mb-4"
         variant={isActive ? 'secondary' : 'default'}
         onClick={handleTogglePreview}
-        disabled={!isTrained}
+        disabled={!isTrained || isLoading}
       >
-        {isActive ? (
+        {isLoading ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            Starting...
+          </>
+        ) : isActive ? (
           <>
             <CameraOff className="h-4 w-4 mr-2" />
             Stop Preview

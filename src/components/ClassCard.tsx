@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { Camera, Upload, X, Trash2, Edit2, Check } from 'lucide-react';
+import { Camera, Upload, X, Trash2, Edit2, Check, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useWebcam } from '@/hooks/useWebcam';
@@ -26,10 +26,11 @@ export function ClassCard({
   const [editName, setEditName] = useState(imageClass.name);
   const [isCapturing, setIsCapturing] = useState(false);
   const [isHoldCapture, setIsHoldCapture] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const captureIntervalRef = useRef<number | null>(null);
   
-  const { videoRef, isActive, error: webcamError, startWebcam, stopWebcam, captureFrame } = useWebcam();
+  const { videoRef, isActive, isLoading, error: webcamError, startWebcam, stopWebcam, captureFrame } = useWebcam();
 
   const handleRename = () => {
     if (editName.trim()) {
@@ -40,48 +41,58 @@ export function ClassCard({
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files) return;
+    if (!files || files.length === 0) return;
 
-    for (const file of Array.from(files)) {
-      if (!file.type.startsWith('image/')) continue;
+    setIsProcessing(true);
+    
+    try {
+      for (const file of Array.from(files)) {
+        if (!file.type.startsWith('image/')) continue;
 
-      const img = new Image();
-      const dataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.readAsDataURL(file);
-      });
+        const img = new Image();
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(new Error('Failed to read file'));
+          reader.readAsDataURL(file);
+        });
 
-      await new Promise<void>((resolve) => {
-        img.onload = async () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = 224;
-          canvas.height = 224;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            // Center crop
-            const size = Math.min(img.width, img.height);
-            const x = (img.width - size) / 2;
-            const y = (img.height - size) / 2;
-            ctx.drawImage(img, x, y, size, size, 0, 0, 224, 224);
-            await onAddSample(canvas.toDataURL('image/jpeg', 0.8), canvas);
-          }
-          resolve();
-        };
-        img.src = dataUrl;
-      });
-    }
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+        await new Promise<void>((resolve) => {
+          img.onload = async () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 224;
+            canvas.height = 224;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              // Center crop
+              const size = Math.min(img.width, img.height);
+              const x = (img.width - size) / 2;
+              const y = (img.height - size) / 2;
+              ctx.drawImage(img, x, y, size, size, 0, 0, 224, 224);
+              await onAddSample(canvas.toDataURL('image/jpeg', 0.8), canvas);
+            }
+            resolve();
+          };
+          img.onerror = () => resolve(); // Skip failed images
+          img.src = dataUrl;
+        });
+      }
+    } catch (err) {
+      console.error('File upload error:', err);
+    } finally {
+      setIsProcessing(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
   const handleStartCapture = async () => {
-    if (!isActive) {
-      await startWebcam();
-    }
     setIsCapturing(true);
+    const success = await startWebcam();
+    if (!success) {
+      // Keep capturing mode to show error
+    }
   };
 
   const handleStopCapture = () => {
@@ -173,7 +184,7 @@ export function ClassCard({
       {/* Webcam / Capture area */}
       {isCapturing && (
         <div className="mb-4">
-          <div className="webcam-container bg-muted rounded-lg overflow-hidden mb-3">
+          <div className="webcam-container bg-muted rounded-lg overflow-hidden mb-3 relative">
             <video
               ref={videoRef}
               autoPlay
@@ -181,9 +192,19 @@ export function ClassCard({
               muted
               className="w-full h-full object-cover"
             />
-            {webcamError && (
-              <div className="absolute inset-0 flex items-center justify-center bg-muted text-muted-foreground text-sm p-4 text-center">
+            {isLoading && (
+              <div className="absolute inset-0 flex items-center justify-center bg-muted/80">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            )}
+            {webcamError && !isLoading && (
+              <div className="absolute inset-0 flex items-center justify-center bg-muted text-destructive text-sm p-4 text-center">
                 {webcamError}
+              </div>
+            )}
+            {!isActive && !isLoading && !webcamError && (
+              <div className="absolute inset-0 flex items-center justify-center bg-muted text-muted-foreground text-sm">
+                Starting camera...
               </div>
             )}
           </div>
@@ -196,9 +217,13 @@ export function ClassCard({
               onMouseLeave={handleHoldEnd}
               onTouchStart={handleHoldStart}
               onTouchEnd={handleHoldEnd}
-              disabled={!isActive}
+              disabled={!isActive || isLoading}
             >
-              <Camera className="h-4 w-4 mr-2" />
+              {isLoading ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Camera className="h-4 w-4 mr-2" />
+              )}
               {isHoldCapture ? 'Capturing...' : 'Hold to Record'}
             </Button>
             <Button variant="outline" onClick={handleStopCapture}>
@@ -223,9 +248,14 @@ export function ClassCard({
             variant="secondary"
             className="flex-1"
             onClick={() => fileInputRef.current?.click()}
+            disabled={isProcessing}
           >
-            <Upload className="h-4 w-4 mr-2" />
-            Upload
+            {isProcessing ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Upload className="h-4 w-4 mr-2" />
+            )}
+            {isProcessing ? 'Processing...' : 'Upload'}
           </Button>
           <input
             ref={fileInputRef}
