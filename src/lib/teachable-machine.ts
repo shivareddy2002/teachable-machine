@@ -71,11 +71,14 @@ class TeachableMachine {
   }
 
   // Build the classifier head
-  private buildClassifier(numClasses: number, inputShape: number[]): tf.Sequential {
+  // NOTE: Input is already flattened 1D feature vectors from MobileNet, so we use Dense directly
+  private buildClassifier(numClasses: number, featureSize: number): tf.Sequential {
     const model = tf.sequential();
 
-    model.add(tf.layers.flatten({ inputShape }));
+    // Input is already 1D (flattened features from MobileNet's GlobalAveragePooling equivalent)
+    // So we use Dense layers directly without Flatten
     model.add(tf.layers.dense({
+      inputShape: [featureSize],
       units: 128,
       activation: 'relu',
       kernelRegularizer: tf.regularizers.l2({ l2: 0.001 }),
@@ -89,6 +92,57 @@ class TeachableMachine {
     return model;
   }
 
+  // Validate training data before training
+  private validateTrainingData(classes: ImageClass[]): { 
+    isValid: boolean; 
+    error?: string; 
+    validClasses: ImageClass[];
+    totalSamples: number;
+  } {
+    const validClasses = classes.filter(c => c.samples.length > 0);
+    
+    if (validClasses.length < 2) {
+      return { 
+        isValid: false, 
+        error: 'Need at least 2 classes with samples to train',
+        validClasses: [],
+        totalSamples: 0
+      };
+    }
+
+    let totalSamples = 0;
+    let validSamples = 0;
+
+    for (const imageClass of validClasses) {
+      for (const sample of imageClass.samples) {
+        totalSamples++;
+        if (sample.tensor && sample.tensor.length > 0) {
+          validSamples++;
+        }
+      }
+    }
+
+    if (validSamples === 0) {
+      return { 
+        isValid: false, 
+        error: 'No valid image samples found. Please re-capture images.',
+        validClasses: [],
+        totalSamples: 0
+      };
+    }
+
+    if (validSamples < validClasses.length) {
+      return { 
+        isValid: false, 
+        error: 'Each class needs at least one valid sample.',
+        validClasses: [],
+        totalSamples: 0
+      };
+    }
+
+    return { isValid: true, validClasses, totalSamples: validSamples };
+  }
+
   // Train the model
   async train(
     classes: ImageClass[],
@@ -96,15 +150,17 @@ class TeachableMachine {
     onProgress: (progress: TrainingProgress) => void
   ): Promise<void> {
     if (!this.mobilenet) {
-      throw new Error('Model not initialized');
+      throw new Error('Model not initialized. Please refresh the page.');
+    }
+
+    // Validate training data
+    const validation = this.validateTrainingData(classes);
+    if (!validation.isValid) {
+      throw new Error(validation.error || 'Invalid training data');
     }
 
     this.classes = classes;
-    const validClasses = classes.filter(c => c.samples.length > 0);
-
-    if (validClasses.length < 2) {
-      throw new Error('Need at least 2 classes with samples to train');
-    }
+    const validClasses = validation.validClasses;
 
     onProgress({
       epoch: 0,
@@ -112,7 +168,7 @@ class TeachableMachine {
       loss: 0,
       accuracy: 0,
       status: 'preparing',
-      message: 'Preparing training data...',
+      message: `Preparing ${validation.totalSamples} samples across ${validClasses.length} classes...`,
     });
 
     // Collect all features and labels
@@ -123,24 +179,36 @@ class TeachableMachine {
       const imageClass = validClasses[classIndex];
       
       for (const sample of imageClass.samples) {
-        if (sample.tensor) {
+        if (sample.tensor && sample.tensor.length > 0) {
           allFeatures.push(new Float32Array(sample.tensor));
           allLabels.push(classIndex);
         }
       }
     }
 
+    // Final validation
     if (allFeatures.length === 0) {
-      throw new Error('No valid samples found');
+      throw new Error('No valid feature vectors found. Please re-add your samples.');
+    }
+
+    // Verify all features have the same shape
+    const featureSize = allFeatures[0].length;
+    const invalidFeatures = allFeatures.filter(f => f.length !== featureSize);
+    if (invalidFeatures.length > 0) {
+      throw new Error(`Inconsistent feature sizes detected. Please clear samples and re-add.`);
     }
 
     // Create tensors
-    const featureShape = allFeatures[0].length;
-    const xs = tf.tensor2d(allFeatures.map(f => Array.from(f)), [allFeatures.length, featureShape]);
+    const xs = tf.tensor2d(allFeatures.map(f => Array.from(f)), [allFeatures.length, featureSize]);
     const ys = tf.oneHot(tf.tensor1d(allLabels, 'int32'), validClasses.length);
 
-    // Build classifier
-    this.classifier = this.buildClassifier(validClasses.length, [featureShape]);
+    // Clean up old classifier
+    if (this.classifier) {
+      this.classifier.dispose();
+    }
+
+    // Build classifier with correct feature size (not shape array)
+    this.classifier = this.buildClassifier(validClasses.length, featureSize);
 
     // Compile model
     this.classifier.compile({
