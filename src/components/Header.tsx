@@ -13,16 +13,16 @@ export function Header() {
               Teachable Machine
             </h1>
             <p className="text-xs text-muted-foreground">
-              Train a computer to recognize your own images
+              Train a Model to Classify Images
             </p>
           </div>
         </div>
         
-        <div className="flex items-center gap-2">
+        {/* <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">
             Powered by TensorFlow.js
           </span>
-        </div>
+        </div> */}
       </div>
     </header>
   );
